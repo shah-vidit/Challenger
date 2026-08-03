@@ -1,39 +1,32 @@
 import streamlit as st
 import pandas as pd
-import pymysql                  # <-- Swapped to pure python
-import pymysql.cursors          # <-- Added for dictionary support
+import pymysql
+import pymysql.cursors
 from datetime import datetime, timedelta
 import time
 
 # ==========================================
 # 1. APP CONFIGURATION & STYLING
 # ==========================================
-st.set_page_config(page_title="Speed Lab: Project Reliance", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="Fintech Speed Lab", page_icon="⚡", layout="wide")
 
-# Custom CSS for Dark-Mode Trading Desk Aesthetic
 st.markdown("""
     <style>
     .stApp { background-color: #0E1117; color: #E0E6ED; }
     .main-header { font-size: 2.5rem; font-weight: 900; color: #00FFAA; text-align: center; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 0px; }
     .sub-header { text-align: center; color: #8892B0; font-size: 1.2rem; margin-bottom: 30px; }
-    .status-badge-val { background-color: #173b22; color: #00FFAA; padding: 4px 10px; border-radius: 5px; font-weight: bold; }
-    .status-badge-fix { background-color: #4a151b; color: #FF4B4B; padding: 4px 10px; border-radius: 5px; font-weight: bold; }
-    .status-badge-prog { background-color: #3b2b00; color: #FFD700; padding: 4px 10px; border-radius: 5px; font-weight: bold; }
-    div[data-testid="stMetricValue"] { color: #00FFAA; }
+    .challenge-card { border: 1px solid #2e364a; padding: 20px; border-radius: 10px; margin-bottom: 15px; background-color: #161b26; }
+    .locked-card { border: 1px dashed #424959; padding: 20px; border-radius: 10px; margin-bottom: 15px; background-color: #0E1117; color: #5c667a; opacity: 0.7;}
     </style>
 """, unsafe_allow_html=True)
 
-# Master Answer Key
-ANSWER_KEY = {'Q1': 0.15, 'Q2': 1.25, 'Q3': 1.80}
 TOLERANCE = 0.01
 
 # ==========================================
-# 2. DATABASE CONNECTION (THREAD-SAFE FIX)
+# 2. DATABASE CONNECTION (THREAD-SAFE)
 # ==========================================
-
-def run_query(query, params=None, fetch=True):
-    # 1. Open a fresh, isolated connection for every query
-    conn = pymysql.connect(
+def get_db_connection():
+    return pymysql.connect(
         host=st.secrets["mysql"]["host"],
         user=st.secrets["mysql"]["user"],
         password=st.secrets["mysql"]["password"],
@@ -41,32 +34,27 @@ def run_query(query, params=None, fetch=True):
         cursorclass=pymysql.cursors.DictCursor,
         autocommit=True
     )
-    
-    # 2. Execute the query and guarantee the connection closes
+
+def run_query(query, params=None, fetch=True):
+    conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
             cursor.execute(query, params or ())
             if fetch:
                 return cursor.fetchall()
-            else:
-                return None
+            return cursor.lastrowid
     finally:
-        # 3. Always close the connection so it doesn't leak memory
         conn.close()
 
 # ==========================================
 # 3. SESSION STATE INITIALIZATION
 # ==========================================
-if 'logged_in' not in st.session_state:
-    st.session_state.logged_in = False
-if 'pod_num' not in st.session_state:
-    st.session_state.pod_num = None
-if 'team_name' not in st.session_state:
-    st.session_state.team_name = None
-if 'admin_mode' not in st.session_state:
-    st.session_state.admin_mode = False
-if 'timer_end' not in st.session_state:
-    st.session_state.timer_end = None
+for key in ['logged_in', 'admin_mode', 'lab_ended']:
+    if key not in st.session_state:
+        st.session_state[key] = False
+for key in ['pod_num', 'team_name', 'timer_end']:
+    if key not in st.session_state:
+        st.session_state[key] = None
 
 # ==========================================
 # 4. SIDEBAR: AUTHENTICATION & ADMIN
@@ -75,22 +63,71 @@ with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/3256/3256114.png", width=80)
     st.title("Terminal Access")
     
-    # Admin Panel
+    # ---------------- ADMIN PANEL ----------------
     with st.expander("⚙️ Admin Console"):
         admin_pass = st.text_input("Admin Password", type="password")
         if admin_pass == "cfo2026":
             st.session_state.admin_mode = True
             st.success("Admin Access Granted")
-            timer_mins = st.number_input("Set Timer (Minutes)", min_value=1, value=15)
-            if st.button("▶️ START SPEED LAB"):
+            
+            # Master Timer & Killswitch
+            st.markdown("### ⏱️ Lab Timer")
+            col1, col2 = st.columns(2)
+            timer_mins = col1.number_input("Set Timer (Mins)", min_value=1, value=15)
+            if col2.button("▶️ START", use_container_width=True):
                 st.session_state.timer_end = datetime.now() + timedelta(minutes=timer_mins)
-                st.success(f"Lab Timer started for {timer_mins} minutes!")
+                st.session_state.lab_ended = False
+                st.success("Timer Started!")
+            
+            if st.button("🏁 END LAB NOW (Reveal Podium)", type="primary", use_container_width=True):
+                st.session_state.lab_ended = True
+                if st.session_state.timer_end:
+                    st.session_state.timer_end = datetime.now() # Kills the timer
+                st.rerun()
+            
+            st.divider()
+            
+            # Mission Deployment
+            st.markdown("### 🚀 Deploy Custom Mission")
+            with st.form("deploy_mission_form"):
+                m_title = st.text_input("Mission Title", "Project Reliance Cleanup")
+                m_brief = st.text_area("CFO Brief (Markdown Supported)", "Analyze the data and clear the challenges.")
+                m_file = st.file_uploader("Attach Dataset (Optional)")
+                
+                st.markdown("**Define Challenges (Step-by-Step):**")
+                default_challenges = pd.DataFrame({
+                    "Step": [1, 2, 3],
+                    "Question": ["Net Profit Margin", "Debt-to-Equity", "Current Ratio"],
+                    "Target": [0.15, 1.25, 1.80]
+                })
+                edited_challenges = st.data_editor(default_challenges, num_rows="dynamic", use_container_width=True)
+                
+                if st.form_submit_button("DEPLOY LIVE TO ALL PODS"):
+                    run_query("UPDATE MISSION_MASTER SET is_active = False", fetch=False)
+                    
+                    file_name = m_file.name if m_file else None
+                    file_data = m_file.getvalue() if m_file else None
+                    
+                    conn = get_db_connection()
+                    try:
+                        with conn.cursor() as cursor:
+                            sql = "INSERT INTO MISSION_MASTER (mission_title, mission_brief, file_name, file_data, is_active) VALUES (%s, %s, %s, %s, True)"
+                            cursor.execute(sql, (m_title, m_brief, file_name, file_data))
+                            new_mission_id = cursor.lastrowid
+                            
+                            for _, row in edited_challenges.iterrows():
+                                c_sql = "INSERT INTO MISSION_CHALLENGES (mission_id, step_number, question_title, target_value) VALUES (%s, %s, %s, %s)"
+                                cursor.execute(c_sql, (new_mission_id, row['Step'], row['Question'], row['Target']))
+                            conn.commit()
+                        st.success("Mission Deployed! Pods can now access it.")
+                    finally:
+                        conn.close()
         elif admin_pass:
             st.error("Invalid Admin Password")
 
     st.divider()
 
-    # Pod Login
+    # ---------------- POD LOGIN ----------------
     if not st.session_state.logged_in:
         st.subheader("Pod Authentication")
         pod_select = st.selectbox("Select Pod", list(range(1, 14)))
@@ -104,200 +141,209 @@ with st.sidebar:
                 st.session_state.team_name = user_data[0]['team_name']
                 st.rerun()
             else:
-                st.error("Invalid Credentials. Check pod number and password.")
+                st.error("Invalid Credentials.")
     else:
         st.success(f"Connected to Pod {st.session_state.pod_num}")
         if st.button("LOGOUT"):
-            st.session_state.logged_in = False
-            st.session_state.pod_num = None
-            st.session_state.team_name = None
+            for key in ['logged_in', 'pod_num', 'team_name']:
+                st.session_state[key] = None
             st.rerun()
 
 # ==========================================
 # 5. TIMER MANAGEMENT
 # ==========================================
-time_remaining = 0
 is_locked = False
-
 if st.session_state.timer_end:
     now = datetime.now()
-    if now < st.session_state.timer_end:
+    if now < st.session_state.timer_end and not st.session_state.lab_ended:
         time_remaining = (st.session_state.timer_end - now).total_seconds()
         mins, secs = divmod(int(time_remaining), 60)
         st.markdown(f"<h2 style='text-align: center; color: #FF4B4B;'>⏳ TIME REMAINING: {mins:02d}:{secs:02d}</h2>", unsafe_allow_html=True)
     else:
         is_locked = True
-        st.markdown("<h2 style='text-align: center; color: #FF4B4B;'>🛑 LAB LOCKED - TIME IS UP</h2>", unsafe_allow_html=True)
+        st.markdown("<h2 style='text-align: center; color: #FF4B4B;'>🛑 LAB LOCKED - TRADING HALTED</h2>", unsafe_allow_html=True)
+elif st.session_state.lab_ended:
+    is_locked = True
 
 # ==========================================
-# 6. MAIN DASHBOARD & LOGIC
+# 6. MAIN DASHBOARD & GAMIFIED MISSION LOGIC
 # ==========================================
-st.markdown("<div class='main-header'>Project Reliance Cleanup</div>", unsafe_allow_html=True)
-st.markdown("<div class='sub-header'>CFO Operations Dashboard // Alpha Release v1.0</div>", unsafe_allow_html=True)
+st.markdown("<div class='main-header'>Fintech Speed Lab</div>", unsafe_allow_html=True)
 
 if st.session_state.logged_in:
     
-    # --- FETCH TEAM MEMBERS ---
-    students = run_query("SELECT student_name FROM STUDENT_MASTER WHERE pod_number = %s", (st.session_state.pod_num,))
-    student_names = ", ".join([s['student_name'] for s in students]) if students else "No members mapped yet."
-    st.info(f"👨‍💻 **Pod Roster:** {student_names}")
-
-    # --- TEAM NAME SETUP ---
     if not st.session_state.team_name:
-        st.warning("⚠️ Name Your Hedge Fund/Pod to Unlock Submission!")
-        col1, col2 = st.columns([3, 1])
-        new_team_name = col1.text_input("Enter your official Team/Fund Name:")
-        if col2.button("🚀 Lock In Team Name", use_container_width=True):
+        st.warning("⚠️ Name our Hedge Fund/Pod to Unlock the Dashboard!")
+        new_team_name = st.text_input("Enter our official Team/Fund Name:")
+        if st.button("🚀 Lock In Team Name"):
             if len(new_team_name.strip()) > 2:
                 run_query("UPDATE POD_AUTH SET team_name = %s WHERE pod_number = %s", (new_team_name.strip(), st.session_state.pod_num), fetch=False)
                 st.session_state.team_name = new_team_name.strip()
                 st.rerun()
-            else:
-                st.error("Name must be at least 3 characters.")
-        
-        st.stop() # Halts rendering until team name is set
+        st.stop()
     
-    st.markdown(f"### 🏦 Fund: **{st.session_state.team_name}**")
-
-    # --- CFO MISSION BRIEF ---
-    with st.expander("📜 VIEW CFO MISSION BRIEF & DATA PARAMS"):
-        st.markdown("""
-        **To:** All Incoming Financial Analytics Pods  
-        **From:** Office of the Chief Financial Officer  
-        
-        Our automated data feed from the exchange corrupted the financial dump for Reliance Industries (`Reliance_Financials_Corrupted.csv`). 
-        
-        **YOUR MISSIONS:**
-        1. **Profitability (Q1):** Drop rows where `Revenue` is `NaN`. Calculate **Net Profit Margin** (Net Income / Revenue).
-        2. **Leverage (Q2):** Clean the `Total Debt` column (remove `$` and `,`, cast to float). Calculate **Debt-to-Equity Ratio** (Total Debt / Total Equity).
-        3. **Liquidity (Q3):** Use EDA to find and drop the fat-finger outlier in `Current Liabilities`. Calculate **Current Ratio** (Current Assets / Current Liabilities).
-        """)
-
-    st.divider()
-
-    # --- SUBMISSION PORTAL ---
-    st.markdown("### ⚡ METRICS INGRESS PORTAL")
+    st.markdown(f"<h3 style='text-align: center;'>🏦 Fund: <b>{st.session_state.team_name}</b></h3>", unsafe_allow_html=True)
     
-    with st.form("submission_form"):
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            q1_val = st.number_input("M1: Net Profit Margin (Q1)", format="%.2f", disabled=is_locked)
-        with col2:
-            q2_val = st.number_input("M2: Debt-to-Equity (Q2)", format="%.2f", disabled=is_locked)
-        with col3:
-            q3_val = st.number_input("M3: Current Ratio (Q3)", format="%.2f", disabled=is_locked)
-            
-        submitted = st.form_submit_button("⚡ SUBMIT METRICS", disabled=is_locked, use_container_width=True)
+    active_mission = run_query("SELECT * FROM MISSION_MASTER WHERE is_active = True LIMIT 1")
+    
+    if not active_mission:
+        st.info("📡 Standing by. Awaiting CFO to deploy the next mission...")
+    else:
+        mission = active_mission[0]
+        m_id = mission['mission_id']
         
-        if submitted and not is_locked:
-            # Evaluate Score
-            score = 0
-            if abs(q1_val - ANSWER_KEY['Q1']) <= TOLERANCE: score += 1
-            if abs(q2_val - ANSWER_KEY['Q2']) <= TOLERANCE: score += 1
-            if abs(q3_val - ANSWER_KEY['Q3']) <= TOLERANCE: score += 1
-            
-            # Ingress to DB
-            run_query("""
-                INSERT INTO LAB_SUBMISSIONS (pod_number, session_id, q1_answer, q2_answer, q3_answer) 
-                VALUES (%s, 'DAY2_LAB1', %s, %s, %s)
-            """, (st.session_state.pod_num, q1_val, q2_val, q3_val), fetch=False)
-            
-            if score == 3:
+        with st.expander("📜 VIEW CFO MISSION BRIEF", expanded=False):
+            st.markdown(f"### {mission['mission_title']}")
+            st.markdown(mission['mission_brief'])
+            if mission['file_data']:
+                st.divider()
+                st.download_button(
+                    label=f"📥 ACQUIRE DATASET: {mission['file_name']}",
+                    data=mission['file_data'],
+                    file_name=mission['file_name'],
+                    use_container_width=True
+                )
+
+        st.divider()
+        
+        challenges = run_query("SELECT * FROM MISSION_CHALLENGES WHERE mission_id = %s ORDER BY step_number ASC", (m_id,))
+        total_challenges = len(challenges)
+        
+        progress_data = run_query("SELECT challenge_id FROM CHALLENGE_SUBMISSIONS WHERE pod_number = %s AND mission_id = %s AND is_correct = True", (st.session_state.pod_num, m_id))
+        solved_ids = [p['challenge_id'] for p in progress_data] if progress_data else []
+        
+        current_step_num = 1
+        for c in challenges:
+            if c['challenge_id'] in solved_ids:
+                current_step_num = c['step_number'] + 1
+        
+        completion_pct = int((len(solved_ids) / total_challenges) * 100) if total_challenges > 0 else 0
+        st.markdown(f"### 🎯 Active Operations Status: {completion_pct}%")
+        st.progress(completion_pct / 100)
+        
+        if current_step_num > total_challenges:
+            if not st.session_state.lab_ended:
                 st.balloons()
-                st.success("🎯 FLAWLESS SUBMISSION! 3/3 Validated! The Board is pleased.")
+            st.success("🏆 ALL MISSIONS ACCOMPLISHED! Alpha Generated. The Board is extremely pleased.")
+            
+        for c in challenges:
+            step = c['step_number']
+            
+            if step < current_step_num:
+                st.markdown(f"<div class='challenge-card'><h4>✅ Phase {step} Secured: {c['question_title']}</h4></div>", unsafe_allow_html=True)
+            
+            elif step == current_step_num:
+                st.markdown(f"<div class='challenge-card' style='border-color: #00FFAA; border-width: 2px;'><h4>▶️ Phase {step}: {c['question_title']}</h4>", unsafe_allow_html=True)
+                
+                col1, col2, col3 = st.columns([1, 2, 1])
+                with col2:
+                    with st.form(key=f"form_step_{step}"):
+                        val = st.number_input("Enter Computed Metric:", format="%.2f", disabled=is_locked)
+                        submit = st.form_submit_button("⚡ EXECUTE TRADE / SUBMIT", disabled=is_locked, use_container_width=True)
+                        
+                        if submit and not is_locked:
+                            is_correct = bool(abs(val - c['target_value']) <= TOLERANCE)
+                            
+                            run_query("""
+                                INSERT INTO CHALLENGE_SUBMISSIONS (pod_number, mission_id, challenge_id, submitted_value, is_correct) 
+                                VALUES (%s, %s, %s, %s, %s)
+                            """, (st.session_state.pod_num, m_id, c['challenge_id'], val, is_correct), fetch=False)
+                            
+                            if is_correct:
+                                st.toast("✅ Metric Validated! Decrypting next phase...", icon="🔓")
+                                time.sleep(1.2)
+                                st.rerun()
+                            else:
+                                st.toast("❌ Audit Failed. Recalculate your matrix.", icon="🚨")
+                st.markdown("</div>", unsafe_allow_html=True)
+            
             else:
-                st.warning(f"Submission accepted. {score}/3 metrics validated. Check the Leaderboard and adjust your code!")
-            time.sleep(1.5)
-            st.rerun()
+                st.markdown(f"<div class='locked-card'><h4>🔒 Phase {step}: Classified (Clear Phase {step-1} to Access)</h4></div>", unsafe_allow_html=True)
 
 st.divider()
 
 # ==========================================
-# 7. HIGH-ENERGY LEADERBOARD
+# 7. GAMIFIED LEADERBOARD & PODIUM
 # ==========================================
 st.markdown("### 🏆 GLOBAL POD LEADERBOARD")
+active_mission = run_query("SELECT mission_id FROM MISSION_MASTER WHERE is_active = True LIMIT 1")
 
-# Helper function to evaluate status
-def get_status_html(val, target):
-    if pd.isna(val):
-        return "<span class='status-badge-prog'>In Progress ⏳</span>"
-    if abs(float(val) - target) <= TOLERANCE:
-        return "<span class='status-badge-val'>Validated ✅</span>"
-    return "<span class='status-badge-fix'>Needs Fix ❌</span>"
+is_time_up = st.session_state.timer_end and datetime.now() >= st.session_state.timer_end
+is_lab_ended = st.session_state.get('lab_ended', False) or is_time_up
 
-# Fetch Master Data
-pods_df = pd.DataFrame(run_query("SELECT pod_number, team_name FROM POD_AUTH"))
-students_df = pd.DataFrame(run_query("SELECT pod_number, student_name FROM STUDENT_MASTER"))
-subs_df = pd.DataFrame(run_query("SELECT pod_number, q1_answer, q2_answer, q3_answer, submission_time FROM LAB_SUBMISSIONS"))
-
-if not pods_df.empty:
-    # Aggregate Students
-    if not students_df.empty:
-        students_grouped = students_df.groupby('pod_number')['student_name'].apply(lambda x: ', '.join(x)).reset_index()
+if active_mission:
+    m_id = active_mission[0]['mission_id']
+    total_q = run_query("SELECT COUNT(*) as t FROM MISSION_CHALLENGES WHERE mission_id = %s", (m_id,))[0]['t']
+    
+    pods_data = run_query("SELECT p.pod_number, COALESCE(p.team_name, 'Unnamed Pod') as team_name, GROUP_CONCAT(DISTINCT s.student_name SEPARATOR ', ') as students FROM POD_AUTH p LEFT JOIN STUDENT_MASTER s ON p.pod_number = s.pod_number GROUP BY p.pod_number, p.team_name")
+    subs_data = run_query("SELECT * FROM CHALLENGE_SUBMISSIONS WHERE mission_id = %s ORDER BY submission_time ASC", (m_id,))
+    
+    df_pods = pd.DataFrame(pods_data)
+    
+    if subs_data:
+        df_subs = pd.DataFrame(subs_data)
+        
+        BASE_SCORE = 100
+        PENALTY_PER_MISS = 15
+        SPEED_DEMON_BONUS = 50
+        
+        scores = []
+        
+        correct_subs = df_subs[df_subs['is_correct'] == 1]
+        first_bloods = correct_subs.drop_duplicates(subset=['challenge_id'], keep='first')
+        
+        for pod in df_pods['pod_number']:
+            pod_subs = df_subs[df_subs['pod_number'] == pod]
+            pod_score = 0
+            phases_cleared = 0
+            badges = []
+            
+            for c_id in pod_subs['challenge_id'].unique():
+                c_attempts = pod_subs[pod_subs['challenge_id'] == c_id]
+                if 1 in c_attempts['is_correct'].values:
+                    phases_cleared += 1
+                    misses = len(c_attempts) - 1
+                    
+                    points = max(BASE_SCORE - (misses * PENALTY_PER_MISS), 20) 
+                    
+                    if pod in first_bloods[first_bloods['challenge_id'] == c_id]['pod_number'].values:
+                        points += SPEED_DEMON_BONUS
+                        badges.append("⚡")
+                    
+                    pod_score += points
+            
+            last_act = pod_subs['submission_time'].max() if not pod_subs.empty else pd.NaT
+            scores.append({'pod_number': pod, 'Score': pod_score, 'Phases': phases_cleared, 'Last Signal': last_act, 'Badges': "".join(badges)})
+            
+        df_scores = pd.DataFrame(scores)
+        df_master = pd.merge(df_pods, df_scores, on='pod_number', how='left').fillna({'Score': 0, 'Phases': 0, 'Badges': ''})
+        
+        df_master = df_master.sort_values(by=['Score', 'Last Signal'], ascending=[False, True]).reset_index(drop=True)
+        df_master.insert(0, 'Rank', range(1, len(df_master) + 1))
+        
+        if is_lab_ended:
+            st.markdown("<h2 style='text-align: center; color: #FFD700;'>🏁 TRADING HALTED - FINAL RESULTS 🏁</h2>", unsafe_allow_html=True)
+            col_2, col_1, col_3 = st.columns([1, 1.2, 1])
+            
+            if len(df_master) >= 1:
+                with col_1:
+                    st.markdown(f"<div style='background: #3b2b00; padding: 20px; border-radius: 10px; text-align: center; border: 2px solid #FFD700;'><h1 style='margin:0;'>🥇 1ST</h1><h3>{df_master.iloc[0]['team_name']}</h3><h2>{int(df_master.iloc[0]['Score'])} PTS</h2><p style='color: #8892B0;'>{df_master.iloc[0]['students']}</p></div>", unsafe_allow_html=True)
+            if len(df_master) >= 2:
+                with col_2:
+                    st.markdown(f"<div style='background: #161b26; padding: 20px; border-radius: 10px; text-align: center; border: 2px solid #C0C0C0; margin-top: 30px;'><h2 style='margin:0;'>🥈 2ND</h2><h4>{df_master.iloc[1]['team_name']}</h4><h3>{int(df_master.iloc[1]['Score'])} PTS</h3></div>", unsafe_allow_html=True)
+            if len(df_master) >= 3:
+                with col_3:
+                    st.markdown(f"<div style='background: #2a1b15; padding: 20px; border-radius: 10px; text-align: center; border: 2px solid #CD7F32; margin-top: 50px;'><h3 style='margin:0;'>🥉 3RD</h3><h4>{df_master.iloc[2]['team_name']}</h4><h3>{int(df_master.iloc[2]['Score'])} PTS</h3></div>", unsafe_allow_html=True)
+            
+            st.divider()
+        
+        df_display = df_master[['Rank', 'team_name', 'Badges', 'Score', 'Phases']].copy()
+        df_display['Phases'] = df_display['Phases'].apply(lambda x: f"{int(x)} / {total_q}")
+        df_display = df_display.rename(columns={'team_name': 'Hedge Fund'})
+        
+        st.dataframe(df_display, use_container_width=True, hide_index=True)
+        
     else:
-        students_grouped = pd.DataFrame(columns=['pod_number', 'student_name'])
-
-    # Aggregate Submissions
-    if not subs_df.empty:
-        subs_df['submission_time'] = pd.to_datetime(subs_df['submission_time'])
-        
-        # Get attempt count
-        attempts = subs_df.groupby('pod_number').size().reset_index(name='Attempts')
-        
-        # Get latest submission
-        latest_subs = subs_df.sort_values('submission_time').groupby('pod_number').tail(1)
-        
-        # Merge stats
-        lab_stats = pd.merge(latest_subs, attempts, on='pod_number')
-    else:
-        lab_stats = pd.DataFrame(columns=['pod_number', 'q1_answer', 'q2_answer', 'q3_answer', 'submission_time', 'Attempts'])
-
-    # Build Master Leaderboard DataFrame
-    lb_df = pd.merge(pods_df, students_grouped, on='pod_number', how='left')
-    lb_df = pd.merge(lb_df, lab_stats, on='pod_number', how='left')
-    
-    # Clean up display names
-    lb_df['team_name'] = lb_df['team_name'].fillna('Unnamed Pod')
-    lb_df['student_name'] = lb_df['student_name'].fillna('Pending Roster')
-    
-    # Calculate Scores & Statuses
-    lb_df['Q1 Status'] = lb_df['q1_answer'].apply(lambda x: get_status_html(x, ANSWER_KEY['Q1']))
-    lb_df['Q2 Status'] = lb_df['q2_answer'].apply(lambda x: get_status_html(x, ANSWER_KEY['Q2']))
-    lb_df['Q3 Status'] = lb_df['q3_answer'].apply(lambda x: get_status_html(x, ANSWER_KEY['Q3']))
-    
-    lb_df['Total Score'] = (
-        (abs(lb_df['q1_answer'] - ANSWER_KEY['Q1']) <= TOLERANCE).astype(int) +
-        (abs(lb_df['q2_answer'] - ANSWER_KEY['Q2']) <= TOLERANCE).astype(int) +
-        (abs(lb_df['q3_answer'] - ANSWER_KEY['Q3']) <= TOLERANCE).astype(int)
-    )
-    
-    # Sorting: Total Score (DESC) -> Timestamp (ASC) -> Attempts (ASC)
-    lb_df['submission_time'] = lb_df['submission_time'].fillna(pd.Timestamp('2099-01-01'))
-    lb_df = lb_df.sort_values(by=['Total Score', 'submission_time', 'Attempts'], ascending=[False, True, True])
-    lb_df['submission_time'] = lb_df['submission_time'].replace(pd.Timestamp('2099-01-01'), pd.NaT)
-    
-    # Create rank column
-    lb_df.insert(0, 'Rank', range(1, len(lb_df) + 1))
-    
-    # Format Output Table
-    display_cols = {
-        'Rank': 'Rank', 
-        'pod_number': 'Pod #', 
-        'team_name': 'Team Name',
-        'student_name': 'Team Members', 
-        'Q1 Status': 'Q1: Profitability', 
-        'Q2 Status': 'Q2: Leverage', 
-        'Q3 Status': 'Q3: Liquidity', 
-        'Total Score': 'Score', 
-        'Attempts': 'Attempts'
-    }
-    
-    final_df = lb_df[display_cols.keys()].rename(columns=display_cols)
-    final_df['Attempts'] = final_df['Attempts'].fillna(0).astype(int)
-    
-    # Render with HTML to support the custom status badges
-    html_table = final_df.to_html(escape=False, index=False, classes='stTable')
-    st.markdown(html_table, unsafe_allow_html=True)
-
+        st.info("Market is quiet. Awaiting first pod transmission...")
 else:
-    st.info("Awaiting seed data initialization.")
+    st.info("Leaderboard will populate when our mission is deployed.")
