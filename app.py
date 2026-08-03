@@ -57,24 +57,21 @@ for key in ['pod_num', 'team_name']:
         st.session_state[key] = None
 
 # ==========================================
-# 4. MISSION STUDIO POP-UP DIALOG (UPGRADED)
+# 4. MISSION STUDIO POP-UP DIALOG (V8 FULL EDITOR)
 # ==========================================
 @st.dialog("🚀 Mission Studio & Management", width="large")
 def mission_studio():
-    # Added tabs for Creation and Deletion/Viewing
     tab_create, tab_manage = st.tabs(["➕ Create New Mission", "🛠️ Manage Existing Missions"])
     
     # --- TAB 1: CREATE ---
     with tab_create:
-        st.markdown("### Create & Save a New Case Study")
-        st.info("Missions saved here are stored in the database and can be activated from the sidebar at any time.")
-        
+        st.markdown("### Draft a New Case Study")
         with st.form("deploy_mission_form"):
             m_title = st.text_input("Mission Title", "Day 3: Bank Stress Test")
             m_brief = st.text_area("CFO Brief (Markdown Supported)", "Analyze the incoming data feed and clear the challenges.")
             m_file = st.file_uploader("Attach Dataset (Optional)")
             
-            st.markdown("**Define Challenges (Step-by-Step):**")
+            st.markdown("**Define Challenges:**")
             default_challenges = pd.DataFrame({
                 "Step": [1, 2, 3],
                 "Question": ["Net Profit Margin", "Debt-to-Equity", "Current Ratio"],
@@ -109,30 +106,80 @@ def mission_studio():
                 finally:
                     conn.close()
                     
-    # --- TAB 2: MANAGE & DELETE ---
+    # --- TAB 2: MANAGE & EDIT ---
     with tab_manage:
-        st.markdown("### View, Audit, or Delete Missions")
-        all_missions = run_query("SELECT mission_id, mission_title, is_active, created_at FROM MISSION_MASTER ORDER BY created_at DESC")
+        st.markdown("### Edit or Delete Missions")
+        all_missions = run_query("SELECT * FROM MISSION_MASTER ORDER BY created_at DESC")
         
         if all_missions:
-            for m in all_missions:
-                # Highlight active mission
-                status_label = "🟢 LIVE" if m['is_active'] else "⚪ STANDBY"
-                with st.expander(f"[{status_label}] Mission ID: {m['mission_id']} — {m['mission_title']}"):
-                    
-                    # Fetch and display the specific challenges for this mission
-                    challs = run_query("SELECT step_number as Step, question_title as Question, target_value as Target FROM MISSION_CHALLENGES WHERE mission_id = %s ORDER BY step_number ASC", (m['mission_id'],))
-                    if challs:
-                        st.dataframe(pd.DataFrame(challs), hide_index=True, use_container_width=True)
-                    
-                    # Delete Button (Uses CSS to make it red)
-                    if st.button("🗑️ Permanently Delete Mission", key=f"del_{m['mission_id']}", type="primary"):
-                        run_query("DELETE FROM MISSION_MASTER WHERE mission_id = %s", (m['mission_id'],), fetch=False)
-                        st.toast(f"Mission ID {m['mission_id']} erased from database.")
-                        time.sleep(1)
-                        st.rerun()
+            mission_opts = {f"ID {m['mission_id']}: {m['mission_title']}": m for m in all_missions}
+            selected_opt = st.selectbox("Select Mission to Edit", list(mission_opts.keys()))
+            m = mission_opts[selected_opt]
+            
+            status_label = "🟢 LIVE" if m['is_active'] else "⚪ STANDBY"
+            st.markdown(f"**Current Status:** {status_label}")
+            
+            # Form to edit the entire mission
+            with st.form(key=f"edit_form_{m['mission_id']}"):
+                edit_title = st.text_input("Mission Title", m['mission_title'])
+                edit_brief = st.text_area("CFO Brief", m['mission_brief'])
+                
+                # Fetch existing challenges with the challenge_id and objective
+                challs = run_query("SELECT challenge_id, step_number as Step, question_title as Question, objective as Objective, target_value as Target FROM MISSION_CHALLENGES WHERE mission_id = %s ORDER BY step_number ASC", (m['mission_id'],))
+                
+                if challs:
+                    df_challs = pd.DataFrame(challs)
+                else:
+                    df_challs = pd.DataFrame(columns=["challenge_id", "Step", "Question", "Objective", "Target"])
+                
+                st.markdown("**Edit Challenges (Step-by-Step):**")
+                # Hide the challenge_id from the user, but keep it in the dataframe to sync updates
+                edited_df = st.data_editor(df_challs, column_config={"challenge_id": None}, num_rows="dynamic", use_container_width=True)
+                
+                save_btn = st.form_submit_button("💾 OVERWRITE MISSION DATA", type="primary", use_container_width=True)
+                
+            if save_btn:
+                orig_ids = [c['challenge_id'] for c in challs]
+                current_ids = []
+                
+                conn = get_db_connection()
+                try:
+                    with conn.cursor() as cursor:
+                        # 1. Update Title and Brief
+                        cursor.execute("UPDATE MISSION_MASTER SET mission_title = %s, mission_brief = %s WHERE mission_id = %s", (edit_title, edit_brief, m['mission_id']))
+                        
+                        # 2. Update, Insert, or Delete Challenges
+                        for _, row in edited_df.iterrows():
+                            cid = row.get('challenge_id', None)
+                            if pd.notna(cid):
+                                cid = int(cid)
+                                current_ids.append(cid)
+                                cursor.execute("UPDATE MISSION_CHALLENGES SET step_number=%s, question_title=%s, objective=%s, target_value=%s WHERE challenge_id=%s", (row['Step'], row['Question'], row['Objective'], row['Target'], cid))
+                            else:
+                                cursor.execute("INSERT INTO MISSION_CHALLENGES (mission_id, step_number, question_title, objective, target_value) VALUES (%s, %s, %s, %s, %s)", (m['mission_id'], row['Step'], row['Question'], row['Objective'], row['Target']))
+                        
+                        # Remove deleted challenges
+                        for oid in orig_ids:
+                            if oid not in current_ids:
+                                cursor.execute("DELETE FROM MISSION_CHALLENGES WHERE challenge_id = %s", (oid,))
+                        
+                        conn.commit()
+                    st.success("Mission successfully updated!")
+                    time.sleep(1)
+                    st.rerun()
+                finally:
+                    conn.close()
+            
+            st.divider()
+            # Danger Zone Delete Button
+            if st.button(f"🗑️ Permanently Delete '{m['mission_title']}'", type="secondary"):
+                run_query("DELETE FROM MISSION_MASTER WHERE mission_id = %s", (m['mission_id'],), fetch=False)
+                st.toast("Mission Deleted from Database.")
+                time.sleep(1)
+                st.rerun()
+                
         else:
-            st.info("No missions available in the database. Create one to get started.")
+            st.info("No missions available. Create one to get started.")
 
 # ==========================================
 # 5. GLOBAL DATA FETCH (Syncs Admin and Pods)
@@ -168,7 +215,6 @@ with st.sidebar:
             missions = run_query("SELECT mission_id, mission_title, is_active FROM MISSION_MASTER ORDER BY created_at DESC")
             
             if missions:
-                # BUG FIX: Used Mission ID in the dictionary key so duplicate titles don't overwrite each other
                 mission_dict = {f"ID {m['mission_id']}: {m['mission_title']}": m['mission_id'] for m in missions}
                 active_m_title = next((f"ID {m['mission_id']}: {m['mission_title']}" for m in missions if m['is_active']), None)
                 
@@ -177,7 +223,7 @@ with st.sidebar:
                 if st.button("🔴 ACTIVATE SELECTED MISSION", use_container_width=True):
                     run_query("UPDATE MISSION_MASTER SET is_active = False, end_time = NULL, is_completed = False", fetch=False)
                     run_query("UPDATE MISSION_MASTER SET is_active = True WHERE mission_id = %s", (mission_dict[selected_mission],), fetch=False)
-                    st.success(f"Mission '{selected_mission}' is now live!")
+                    st.success(f"Mission is now live!")
                     time.sleep(1)
                     st.rerun()
             else:
@@ -239,7 +285,6 @@ with st.sidebar:
 # ==========================================
 st.markdown("<div class='main-header'>Fintech Speed Lab</div>", unsafe_allow_html=True)
 
-# Global Timer Display
 if timer_end_time and not is_lab_ended:
     time_remaining = (timer_end_time - datetime.now()).total_seconds()
     mins, secs = divmod(int(time_remaining), 60)
