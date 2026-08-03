@@ -63,14 +63,12 @@ with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/3256/3256114.png", width=80)
     st.title("Terminal Access")
     
-    # ---------------- ADMIN PANEL ----------------
     with st.expander("⚙️ Admin Console"):
         admin_pass = st.text_input("Admin Password", type="password")
         if admin_pass == "cfo2026":
             st.session_state.admin_mode = True
             st.success("Admin Access Granted")
             
-            # Master Timer & Killswitch
             st.markdown("### ⏱️ Lab Timer")
             col1, col2 = st.columns(2)
             timer_mins = col1.number_input("Set Timer (Mins)", min_value=1, value=15)
@@ -82,12 +80,11 @@ with st.sidebar:
             if st.button("🏁 END LAB NOW (Reveal Podium)", type="primary", use_container_width=True):
                 st.session_state.lab_ended = True
                 if st.session_state.timer_end:
-                    st.session_state.timer_end = datetime.now() # Kills the timer
+                    st.session_state.timer_end = datetime.now() 
                 st.rerun()
             
             st.divider()
             
-            # Mission Deployment
             st.markdown("### 🚀 Deploy Custom Mission")
             with st.form("deploy_mission_form"):
                 m_title = st.text_input("Mission Title", "Project Reliance Cleanup")
@@ -127,7 +124,6 @@ with st.sidebar:
 
     st.divider()
 
-    # ---------------- POD LOGIN ----------------
     if not st.session_state.logged_in:
         st.subheader("Pod Authentication")
         pod_select = st.selectbox("Select Pod", list(range(1, 14)))
@@ -239,22 +235,32 @@ if st.session_state.logged_in:
                 with col2:
                     with st.form(key=f"form_step_{step}"):
                         val = st.number_input("Enter Computed Metric:", format="%.2f", disabled=is_locked)
+                        
+                        # --- THE NEW AUDIT TRAIL FIELD ---
+                        audit_code = st.text_area("Audit Trail (Paste your Pandas code here):", 
+                                                  placeholder="e.g., df['Revenue'].dropna()...", 
+                                                  disabled=is_locked)
+                        
                         submit = st.form_submit_button("⚡ EXECUTE TRADE / SUBMIT", disabled=is_locked, use_container_width=True)
                         
                         if submit and not is_locked:
-                            is_correct = bool(abs(val - c['target_value']) <= TOLERANCE)
-                            
-                            run_query("""
-                                INSERT INTO CHALLENGE_SUBMISSIONS (pod_number, mission_id, challenge_id, submitted_value, is_correct) 
-                                VALUES (%s, %s, %s, %s, %s)
-                            """, (st.session_state.pod_num, m_id, c['challenge_id'], val, is_correct), fetch=False)
-                            
-                            if is_correct:
-                                st.toast("✅ Metric Validated! Decrypting next phase...", icon="🔓")
-                                time.sleep(1.2)
-                                st.rerun()
+                            # --- ENFORCE CODE REQUIREMENT ---
+                            if len(audit_code.strip()) < 10:
+                                st.toast("❌ Audit Failed. You must provide your Python/Pandas code.", icon="🚨")
                             else:
-                                st.toast("❌ Audit Failed. Recalculate your matrix.", icon="🚨")
+                                is_correct = bool(abs(val - c['target_value']) <= TOLERANCE)
+                                
+                                run_query("""
+                                    INSERT INTO CHALLENGE_SUBMISSIONS (pod_number, mission_id, challenge_id, submitted_value, is_correct, audit_code) 
+                                    VALUES (%s, %s, %s, %s, %s, %s)
+                                """, (st.session_state.pod_num, m_id, c['challenge_id'], val, is_correct, audit_code), fetch=False)
+                                
+                                if is_correct:
+                                    st.toast("✅ Metric Validated! Decrypting next phase...", icon="🔓")
+                                    time.sleep(1.2)
+                                    st.rerun()
+                                else:
+                                    st.toast("❌ Audit Failed. Recalculate your matrix.", icon="🚨")
                 st.markdown("</div>", unsafe_allow_html=True)
             
             else:
