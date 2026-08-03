@@ -57,7 +57,7 @@ for key in ['pod_num', 'team_name']:
         st.session_state[key] = None
 
 # ==========================================
-# 4. MISSION STUDIO POP-UP DIALOG (V8 FULL EDITOR)
+# 4. MISSION STUDIO POP-UP DIALOG (V9)
 # ==========================================
 @st.dialog("🚀 Mission Studio & Management", width="large")
 def mission_studio():
@@ -124,7 +124,11 @@ def mission_studio():
                 edit_title = st.text_input("Mission Title", m['mission_title'])
                 edit_brief = st.text_area("CFO Brief", m['mission_brief'])
                 
-                # Fetch existing challenges with the challenge_id and objective
+                # Dynamic File Uploader Logic
+                curr_file = m['file_name'] if m.get('file_name') else "No file attached"
+                st.markdown(f"**Current Dataset:** `{curr_file}`")
+                edit_file = st.file_uploader("Replace Dataset (Leave blank to keep existing dataset)", key=f"file_edit_{m['mission_id']}")
+                
                 challs = run_query("SELECT challenge_id, step_number as Step, question_title as Question, objective as Objective, target_value as Target FROM MISSION_CHALLENGES WHERE mission_id = %s ORDER BY step_number ASC", (m['mission_id'],))
                 
                 if challs:
@@ -133,7 +137,6 @@ def mission_studio():
                     df_challs = pd.DataFrame(columns=["challenge_id", "Step", "Question", "Objective", "Target"])
                 
                 st.markdown("**Edit Challenges (Step-by-Step):**")
-                # Hide the challenge_id from the user, but keep it in the dataframe to sync updates
                 edited_df = st.data_editor(df_challs, column_config={"challenge_id": None}, num_rows="dynamic", use_container_width=True)
                 
                 save_btn = st.form_submit_button("💾 OVERWRITE MISSION DATA", type="primary", use_container_width=True)
@@ -145,8 +148,13 @@ def mission_studio():
                 conn = get_db_connection()
                 try:
                     with conn.cursor() as cursor:
-                        # 1. Update Title and Brief
-                        cursor.execute("UPDATE MISSION_MASTER SET mission_title = %s, mission_brief = %s WHERE mission_id = %s", (edit_title, edit_brief, m['mission_id']))
+                        # 1. Update Title, Brief, and File
+                        if edit_file:
+                            file_name = edit_file.name
+                            file_data = edit_file.getvalue()
+                            cursor.execute("UPDATE MISSION_MASTER SET mission_title = %s, mission_brief = %s, file_name = %s, file_data = %s WHERE mission_id = %s", (edit_title, edit_brief, file_name, file_data, m['mission_id']))
+                        else:
+                            cursor.execute("UPDATE MISSION_MASTER SET mission_title = %s, mission_brief = %s WHERE mission_id = %s", (edit_title, edit_brief, m['mission_id']))
                         
                         # 2. Update, Insert, or Delete Challenges
                         for _, row in edited_df.iterrows():
@@ -171,7 +179,6 @@ def mission_studio():
                     conn.close()
             
             st.divider()
-            # Danger Zone Delete Button
             if st.button(f"🗑️ Permanently Delete '{m['mission_title']}'", type="secondary"):
                 run_query("DELETE FROM MISSION_MASTER WHERE mission_id = %s", (m['mission_id'],), fetch=False)
                 st.toast("Mission Deleted from Database.")
@@ -210,7 +217,6 @@ with st.sidebar:
             st.session_state.admin_mode = True
             st.success("Admin Access Granted")
             
-            # --- MISSION SELECTION & ACTIVATION ---
             st.markdown("### 📡 Live Operations")
             missions = run_query("SELECT mission_id, mission_title, is_active FROM MISSION_MASTER ORDER BY created_at DESC")
             
@@ -234,7 +240,6 @@ with st.sidebar:
             
             st.divider()
             
-            # --- TIMER CONTROLS (Broadcasts to DB) ---
             if mission:
                 st.markdown("### ⏱️ Master Mission Controls")
                 col1, col2 = st.columns(2)
