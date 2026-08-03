@@ -49,15 +49,79 @@ def run_query(query, params=None, fetch=True):
 # ==========================================
 # 3. SESSION STATE INITIALIZATION
 # ==========================================
-for key in ['logged_in', 'admin_mode', 'lab_ended']:
+for key in ['logged_in', 'admin_mode']:
     if key not in st.session_state:
         st.session_state[key] = False
-for key in ['pod_num', 'team_name', 'timer_end']:
+for key in ['pod_num', 'team_name']:
     if key not in st.session_state:
         st.session_state[key] = None
 
 # ==========================================
-# 4. SIDEBAR: AUTHENTICATION & ADMIN
+# 4. MISSION STUDIO POP-UP DIALOG
+# ==========================================
+@st.dialog("🚀 Mission Studio", width="large")
+def mission_studio():
+    st.markdown("### Create & Save a New Case Study")
+    st.info("Missions saved here are stored in the database and can be activated from the sidebar at any time.")
+    
+    with st.form("deploy_mission_form"):
+        m_title = st.text_input("Mission Title", "Day 3: Bank Stress Test")
+        m_brief = st.text_area("CFO Brief (Markdown Supported)", "Analyze the incoming data feed and clear the challenges.")
+        m_file = st.file_uploader("Attach Dataset (Optional)")
+        
+        st.markdown("**Define Challenges (Step-by-Step):**")
+        default_challenges = pd.DataFrame({
+            "Step": [1, 2, 3],
+            "Question": ["Net Profit Margin", "Debt-to-Equity", "Current Ratio"],
+            "Objective": [
+                "Drop all rows where 'Revenue' is NaN. Calculate Net Income / Revenue.", 
+                "Clean string formatting in Total Debt. Calculate Debt / Equity.", 
+                "Perform EDA to drop outliers in Liabilities. Calculate Assets / Liabilities."
+            ],
+            "Target": [0.15, 1.25, 1.80]
+        })
+        
+        edited_challenges = st.data_editor(default_challenges, num_rows="dynamic", use_container_width=True)
+        
+        if st.form_submit_button("💾 SAVE MISSION TO DATABASE"):
+            file_name = m_file.name if m_file else None
+            file_data = m_file.getvalue() if m_file else None
+            
+            conn = get_db_connection()
+            try:
+                with conn.cursor() as cursor:
+                    sql = "INSERT INTO MISSION_MASTER (mission_title, mission_brief, file_name, file_data, is_active) VALUES (%s, %s, %s, %s, False)"
+                    cursor.execute(sql, (m_title, m_brief, file_name, file_data))
+                    new_mission_id = cursor.lastrowid
+                    
+                    for _, row in edited_challenges.iterrows():
+                        c_sql = "INSERT INTO MISSION_CHALLENGES (mission_id, step_number, question_title, objective, target_value) VALUES (%s, %s, %s, %s, %s)"
+                        cursor.execute(c_sql, (new_mission_id, row['Step'], row['Question'], row['Objective'], row['Target']))
+                    conn.commit()
+                st.success(f"Mission '{m_title}' successfully saved!")
+                time.sleep(1.5)
+                st.rerun()
+            finally:
+                conn.close()
+
+# ==========================================
+# 5. GLOBAL DATA FETCH (Syncs Admin and Pods)
+# ==========================================
+active_mission_data = run_query("SELECT * FROM MISSION_MASTER WHERE is_active = True LIMIT 1")
+mission = active_mission_data[0] if active_mission_data else None
+
+is_time_up = False
+is_lab_ended = False
+timer_end_time = None
+
+if mission:
+    timer_end_time = mission['end_time']
+    if timer_end_time:
+        is_time_up = datetime.now() >= timer_end_time
+    is_lab_ended = mission['is_completed'] or is_time_up
+
+# ==========================================
+# 6. SIDEBAR: AUTHENTICATION & ADMIN
 # ==========================================
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/3256/3256114.png", width=80)
@@ -69,56 +133,50 @@ with st.sidebar:
             st.session_state.admin_mode = True
             st.success("Admin Access Granted")
             
-            st.markdown("### ⏱️ Lab Timer")
-            col1, col2 = st.columns(2)
-            timer_mins = col1.number_input("Set Timer (Mins)", min_value=1, value=15)
-            if col2.button("▶️ START", use_container_width=True):
-                st.session_state.timer_end = datetime.now() + timedelta(minutes=timer_mins)
-                st.session_state.lab_ended = False
-                st.success("Timer Started!")
+            # --- MISSION SELECTION & ACTIVATION ---
+            st.markdown("### 📡 Live Operations")
+            missions = run_query("SELECT mission_id, mission_title, is_active FROM MISSION_MASTER ORDER BY created_at DESC")
             
-            if st.button("🏁 END LAB NOW (Reveal Podium)", type="primary", use_container_width=True):
-                st.session_state.lab_ended = True
-                if st.session_state.timer_end:
-                    st.session_state.timer_end = datetime.now() 
-                st.rerun()
+            if missions:
+                mission_dict = {m['mission_title']: m['mission_id'] for m in missions}
+                active_m_title = next((m['mission_title'] for m in missions if m['is_active']), None)
+                
+                selected_mission = st.selectbox("Select Mission to Broadcast", options=list(mission_dict.keys()), index=list(mission_dict.keys()).index(active_m_title) if active_m_title else 0)
+                
+                if st.button("🔴 ACTIVATE SELECTED MISSION", use_container_width=True):
+                    run_query("UPDATE MISSION_MASTER SET is_active = False, end_time = NULL, is_completed = False", fetch=False)
+                    run_query("UPDATE MISSION_MASTER SET is_active = True WHERE mission_id = %s", (mission_dict[selected_mission],), fetch=False)
+                    st.success(f"'{selected_mission}' is now live!")
+                    time.sleep(1)
+                    st.rerun()
+            else:
+                st.warning("No missions found in database.")
+                
+            if st.button("➕ Open Mission Studio", use_container_width=True):
+                mission_studio()
             
             st.divider()
             
-            st.markdown("### 🚀 Deploy Custom Mission")
-            with st.form("deploy_mission_form"):
-                m_title = st.text_input("Mission Title", "Project Reliance Cleanup")
-                m_brief = st.text_area("CFO Brief (Markdown Supported)", "Analyze the data and clear the challenges.")
-                m_file = st.file_uploader("Attach Dataset (Optional)")
+            # --- TIMER CONTROLS (Broadcasts to DB) ---
+            if mission:
+                st.markdown("### ⏱️ Master Mission Controls")
+                col1, col2 = st.columns(2)
+                timer_mins = col1.number_input("Set Timer (Mins)", min_value=1, value=15)
                 
-                st.markdown("**Define Challenges (Step-by-Step):**")
-                default_challenges = pd.DataFrame({
-                    "Step": [1, 2, 3],
-                    "Question": ["Net Profit Margin", "Debt-to-Equity", "Current Ratio"],
-                    "Target": [0.15, 1.25, 1.80]
-                })
-                edited_challenges = st.data_editor(default_challenges, num_rows="dynamic", use_container_width=True)
+                if col2.button("▶️ START TIMER", use_container_width=True):
+                    new_end_time = datetime.now() + timedelta(minutes=timer_mins)
+                    run_query("UPDATE MISSION_MASTER SET end_time = %s, is_completed = False WHERE mission_id = %s", (new_end_time, mission['mission_id']), fetch=False)
+                    st.success("Global Timer Started!")
+                    time.sleep(1)
+                    st.rerun()
                 
-                if st.form_submit_button("DEPLOY LIVE TO ALL PODS"):
-                    run_query("UPDATE MISSION_MASTER SET is_active = False", fetch=False)
-                    
-                    file_name = m_file.name if m_file else None
-                    file_data = m_file.getvalue() if m_file else None
-                    
-                    conn = get_db_connection()
-                    try:
-                        with conn.cursor() as cursor:
-                            sql = "INSERT INTO MISSION_MASTER (mission_title, mission_brief, file_name, file_data, is_active) VALUES (%s, %s, %s, %s, True)"
-                            cursor.execute(sql, (m_title, m_brief, file_name, file_data))
-                            new_mission_id = cursor.lastrowid
-                            
-                            for _, row in edited_challenges.iterrows():
-                                c_sql = "INSERT INTO MISSION_CHALLENGES (mission_id, step_number, question_title, target_value) VALUES (%s, %s, %s, %s)"
-                                cursor.execute(c_sql, (new_mission_id, row['Step'], row['Question'], row['Target']))
-                            conn.commit()
-                        st.success("Mission Deployed! Pods can now access it.")
-                    finally:
-                        conn.close()
+                if st.button("🏁 HALT TRADING (Reveal Podium)", type="primary", use_container_width=True):
+                    run_query("UPDATE MISSION_MASTER SET is_completed = True WHERE mission_id = %s", (mission['mission_id'],), fetch=False)
+                    time.sleep(1)
+                    st.rerun()
+            else:
+                st.info("Activate a mission to access timer controls.")
+            
         elif admin_pass:
             st.error("Invalid Admin Password")
 
@@ -146,25 +204,17 @@ with st.sidebar:
             st.rerun()
 
 # ==========================================
-# 5. TIMER MANAGEMENT
-# ==========================================
-is_locked = False
-if st.session_state.timer_end:
-    now = datetime.now()
-    if now < st.session_state.timer_end and not st.session_state.lab_ended:
-        time_remaining = (st.session_state.timer_end - now).total_seconds()
-        mins, secs = divmod(int(time_remaining), 60)
-        st.markdown(f"<h2 style='text-align: center; color: #FF4B4B;'>⏳ TIME REMAINING: {mins:02d}:{secs:02d}</h2>", unsafe_allow_html=True)
-    else:
-        is_locked = True
-        st.markdown("<h2 style='text-align: center; color: #FF4B4B;'>🛑 LAB LOCKED - TRADING HALTED</h2>", unsafe_allow_html=True)
-elif st.session_state.lab_ended:
-    is_locked = True
-
-# ==========================================
-# 6. MAIN DASHBOARD & GAMIFIED MISSION LOGIC
+# 7. MAIN DASHBOARD & GAMIFIED MISSION LOGIC
 # ==========================================
 st.markdown("<div class='main-header'>Fintech Speed Lab</div>", unsafe_allow_html=True)
+
+# Global Timer Display
+if timer_end_time and not is_lab_ended:
+    time_remaining = (timer_end_time - datetime.now()).total_seconds()
+    mins, secs = divmod(int(time_remaining), 60)
+    st.markdown(f"<h2 style='text-align: center; color: #FF4B4B;'>⏳ TIME REMAINING: {mins:02d}:{secs:02d}</h2>", unsafe_allow_html=True)
+elif is_lab_ended:
+    st.markdown("<h2 style='text-align: center; color: #FF4B4B;'>🛑 LAB LOCKED - TRADING HALTED</h2>", unsafe_allow_html=True)
 
 if st.session_state.logged_in:
     
@@ -180,12 +230,9 @@ if st.session_state.logged_in:
     
     st.markdown(f"<h3 style='text-align: center;'>🏦 Fund: <b>{st.session_state.team_name}</b></h3>", unsafe_allow_html=True)
     
-    active_mission = run_query("SELECT * FROM MISSION_MASTER WHERE is_active = True LIMIT 1")
-    
-    if not active_mission:
+    if not mission:
         st.info("📡 Standing by. Awaiting CFO to deploy the next mission...")
     else:
-        mission = active_mission[0]
         m_id = mission['mission_id']
         
         with st.expander("📜 VIEW CFO MISSION BRIEF", expanded=False):
@@ -218,7 +265,7 @@ if st.session_state.logged_in:
         st.progress(completion_pct / 100)
         
         if current_step_num > total_challenges:
-            if not st.session_state.lab_ended:
+            if not is_lab_ended:
                 st.balloons()
             st.success("🏆 ALL MISSIONS ACCOMPLISHED! Alpha Generated. The Board is extremely pleased.")
             
@@ -229,22 +276,26 @@ if st.session_state.logged_in:
                 st.markdown(f"<div class='challenge-card'><h4>✅ Phase {step} Secured: {c['question_title']}</h4></div>", unsafe_allow_html=True)
             
             elif step == current_step_num:
-                st.markdown(f"<div class='challenge-card' style='border-color: #00FFAA; border-width: 2px;'><h4>▶️ Phase {step}: {c['question_title']}</h4>", unsafe_allow_html=True)
+                st.markdown(f"""
+                <div class='challenge-card' style='border-color: #00FFAA; border-width: 2px;'>
+                    <h4>▶️ Phase {step}: {c['question_title']}</h4>
+                    <p style='color: #8892B0; padding-left: 5px; border-left: 3px solid #FFD700; margin-bottom: 20px;'>
+                        <b>Objective:</b> {c['objective']}
+                    </p>
+                """, unsafe_allow_html=True)
                 
                 col1, col2, col3 = st.columns([1, 2, 1])
                 with col2:
                     with st.form(key=f"form_step_{step}"):
-                        val = st.number_input("Enter Computed Metric:", format="%.2f", disabled=is_locked)
+                        val = st.number_input("Enter Computed Metric:", format="%.2f", disabled=is_lab_ended)
                         
-                        # --- THE NEW AUDIT TRAIL FIELD ---
                         audit_code = st.text_area("Audit Trail (Paste your Pandas code here):", 
                                                   placeholder="e.g., df['Revenue'].dropna()...", 
-                                                  disabled=is_locked)
+                                                  disabled=is_lab_ended)
                         
-                        submit = st.form_submit_button("⚡ EXECUTE TRADE / SUBMIT", disabled=is_locked, use_container_width=True)
+                        submit = st.form_submit_button("⚡ EXECUTE TRADE / SUBMIT", disabled=is_lab_ended, use_container_width=True)
                         
-                        if submit and not is_locked:
-                            # --- ENFORCE CODE REQUIREMENT ---
+                        if submit and not is_lab_ended:
                             if len(audit_code.strip()) < 10:
                                 st.toast("❌ Audit Failed. You must provide your Python/Pandas code.", icon="🚨")
                             else:
@@ -269,16 +320,12 @@ if st.session_state.logged_in:
 st.divider()
 
 # ==========================================
-# 7. GAMIFIED LEADERBOARD & PODIUM
+# 8. GAMIFIED LEADERBOARD & PODIUM
 # ==========================================
 st.markdown("### 🏆 GLOBAL POD LEADERBOARD")
-active_mission = run_query("SELECT mission_id FROM MISSION_MASTER WHERE is_active = True LIMIT 1")
 
-is_time_up = st.session_state.timer_end and datetime.now() >= st.session_state.timer_end
-is_lab_ended = st.session_state.get('lab_ended', False) or is_time_up
-
-if active_mission:
-    m_id = active_mission[0]['mission_id']
+if mission:
+    m_id = mission['mission_id']
     total_q = run_query("SELECT COUNT(*) as t FROM MISSION_CHALLENGES WHERE mission_id = %s", (m_id,))[0]['t']
     
     pods_data = run_query("SELECT p.pod_number, COALESCE(p.team_name, 'Unnamed Pod') as team_name, GROUP_CONCAT(DISTINCT s.student_name SEPARATOR ', ') as students FROM POD_AUTH p LEFT JOIN STUDENT_MASTER s ON p.pod_number = s.pod_number GROUP BY p.pod_number, p.team_name")
@@ -352,4 +399,4 @@ if active_mission:
     else:
         st.info("Market is quiet. Awaiting first pod transmission...")
 else:
-    st.info("Leaderboard will populate when our mission is deployed.")
+    st.info("Leaderboard will populate when a mission is deployed.")
