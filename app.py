@@ -55,12 +55,16 @@ TOLERANCE = 0.01
 # ==========================================
 # NOTE: Replace with your actual Alwaysdata credentials or use Streamlit secrets
 @st.cache_resource
+# ==========================================
+# 2. DATABASE CONNECTION (UPDATED FOR SECRETS)
+# ==========================================
+@st.cache_resource
 def init_connection():
     return mysql.connector.connect(
-        host="YOUR_ALWAYSDATA_HOST", # e.g., mysql-accountname.alwaysdata.net
-        user="YOUR_DB_USER",
-        password="YOUR_DB_PASSWORD",
-        database="YOUR_DB_NAME"
+        host=st.secrets["mysql"]["host"],
+        user=st.secrets["mysql"]["user"],
+        password=st.secrets["mysql"]["password"],
+        database=st.secrets["mysql"]["database"]
     )
 
 def run_query(query, params=None, fetch=True):
