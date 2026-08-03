@@ -4,6 +4,7 @@ import pymysql
 import pymysql.cursors
 from datetime import datetime, timedelta
 import time
+from streamlit_autorefresh import st_autorefresh
 
 # ==========================================
 # 1. APP CONFIGURATION & STYLING
@@ -284,7 +285,14 @@ with st.sidebar:
             for key in ['logged_in', 'pod_num', 'team_name']:
                 st.session_state[key] = None
             st.rerun()
-
+# ==========================================
+# 6.5 LIVE PROJECTOR SYNC (AUTO-REFRESH)
+# ==========================================
+# If a mission is active and time is ticking, refresh the page every 5 seconds (5000 milliseconds)
+# This ensures the countdown timer ticks down and the Leaderboard updates live on the projector.
+if timer_end_time and not is_lab_ended:
+    st_autorefresh(interval=5000, key="live_projector_sync")
+    
 # ==========================================
 # 7. MAIN DASHBOARD & GAMIFIED MISSION LOGIC
 # ==========================================
