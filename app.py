@@ -57,52 +57,82 @@ for key in ['pod_num', 'team_name']:
         st.session_state[key] = None
 
 # ==========================================
-# 4. MISSION STUDIO POP-UP DIALOG
+# 4. MISSION STUDIO POP-UP DIALOG (UPGRADED)
 # ==========================================
-@st.dialog("🚀 Mission Studio", width="large")
+@st.dialog("🚀 Mission Studio & Management", width="large")
 def mission_studio():
-    st.markdown("### Create & Save a New Case Study")
-    st.info("Missions saved here are stored in the database and can be activated from the sidebar at any time.")
+    # Added tabs for Creation and Deletion/Viewing
+    tab_create, tab_manage = st.tabs(["➕ Create New Mission", "🛠️ Manage Existing Missions"])
     
-    with st.form("deploy_mission_form"):
-        m_title = st.text_input("Mission Title", "Day 3: Bank Stress Test")
-        m_brief = st.text_area("CFO Brief (Markdown Supported)", "Analyze the incoming data feed and clear the challenges.")
-        m_file = st.file_uploader("Attach Dataset (Optional)")
+    # --- TAB 1: CREATE ---
+    with tab_create:
+        st.markdown("### Create & Save a New Case Study")
+        st.info("Missions saved here are stored in the database and can be activated from the sidebar at any time.")
         
-        st.markdown("**Define Challenges (Step-by-Step):**")
-        default_challenges = pd.DataFrame({
-            "Step": [1, 2, 3],
-            "Question": ["Net Profit Margin", "Debt-to-Equity", "Current Ratio"],
-            "Objective": [
-                "Drop all rows where 'Revenue' is NaN. Calculate Net Income / Revenue.", 
-                "Clean string formatting in Total Debt. Calculate Debt / Equity.", 
-                "Perform EDA to drop outliers in Liabilities. Calculate Assets / Liabilities."
-            ],
-            "Target": [0.15, 1.25, 1.80]
-        })
-        
-        edited_challenges = st.data_editor(default_challenges, num_rows="dynamic", use_container_width=True)
-        
-        if st.form_submit_button("💾 SAVE MISSION TO DATABASE"):
-            file_name = m_file.name if m_file else None
-            file_data = m_file.getvalue() if m_file else None
+        with st.form("deploy_mission_form"):
+            m_title = st.text_input("Mission Title", "Day 3: Bank Stress Test")
+            m_brief = st.text_area("CFO Brief (Markdown Supported)", "Analyze the incoming data feed and clear the challenges.")
+            m_file = st.file_uploader("Attach Dataset (Optional)")
             
-            conn = get_db_connection()
-            try:
-                with conn.cursor() as cursor:
-                    sql = "INSERT INTO MISSION_MASTER (mission_title, mission_brief, file_name, file_data, is_active) VALUES (%s, %s, %s, %s, False)"
-                    cursor.execute(sql, (m_title, m_brief, file_name, file_data))
-                    new_mission_id = cursor.lastrowid
+            st.markdown("**Define Challenges (Step-by-Step):**")
+            default_challenges = pd.DataFrame({
+                "Step": [1, 2, 3],
+                "Question": ["Net Profit Margin", "Debt-to-Equity", "Current Ratio"],
+                "Objective": [
+                    "Drop all rows where 'Revenue' is NaN. Calculate Net Income / Revenue.", 
+                    "Clean string formatting in Total Debt. Calculate Debt / Equity.", 
+                    "Perform EDA to drop outliers in Liabilities. Calculate Assets / Liabilities."
+                ],
+                "Target": [0.15, 1.25, 1.80]
+            })
+            
+            edited_challenges = st.data_editor(default_challenges, num_rows="dynamic", use_container_width=True)
+            
+            if st.form_submit_button("💾 SAVE MISSION TO DATABASE"):
+                file_name = m_file.name if m_file else None
+                file_data = m_file.getvalue() if m_file else None
+                
+                conn = get_db_connection()
+                try:
+                    with conn.cursor() as cursor:
+                        sql = "INSERT INTO MISSION_MASTER (mission_title, mission_brief, file_name, file_data, is_active) VALUES (%s, %s, %s, %s, False)"
+                        cursor.execute(sql, (m_title, m_brief, file_name, file_data))
+                        new_mission_id = cursor.lastrowid
+                        
+                        for _, row in edited_challenges.iterrows():
+                            c_sql = "INSERT INTO MISSION_CHALLENGES (mission_id, step_number, question_title, objective, target_value) VALUES (%s, %s, %s, %s, %s)"
+                            cursor.execute(c_sql, (new_mission_id, row['Step'], row['Question'], row['Objective'], row['Target']))
+                        conn.commit()
+                    st.success(f"Mission '{m_title}' successfully saved!")
+                    time.sleep(1.5)
+                    st.rerun()
+                finally:
+                    conn.close()
                     
-                    for _, row in edited_challenges.iterrows():
-                        c_sql = "INSERT INTO MISSION_CHALLENGES (mission_id, step_number, question_title, objective, target_value) VALUES (%s, %s, %s, %s, %s)"
-                        cursor.execute(c_sql, (new_mission_id, row['Step'], row['Question'], row['Objective'], row['Target']))
-                    conn.commit()
-                st.success(f"Mission '{m_title}' successfully saved!")
-                time.sleep(1.5)
-                st.rerun()
-            finally:
-                conn.close()
+    # --- TAB 2: MANAGE & DELETE ---
+    with tab_manage:
+        st.markdown("### View, Audit, or Delete Missions")
+        all_missions = run_query("SELECT mission_id, mission_title, is_active, created_at FROM MISSION_MASTER ORDER BY created_at DESC")
+        
+        if all_missions:
+            for m in all_missions:
+                # Highlight active mission
+                status_label = "🟢 LIVE" if m['is_active'] else "⚪ STANDBY"
+                with st.expander(f"[{status_label}] Mission ID: {m['mission_id']} — {m['mission_title']}"):
+                    
+                    # Fetch and display the specific challenges for this mission
+                    challs = run_query("SELECT step_number as Step, question_title as Question, target_value as Target FROM MISSION_CHALLENGES WHERE mission_id = %s ORDER BY step_number ASC", (m['mission_id'],))
+                    if challs:
+                        st.dataframe(pd.DataFrame(challs), hide_index=True, use_container_width=True)
+                    
+                    # Delete Button (Uses CSS to make it red)
+                    if st.button("🗑️ Permanently Delete Mission", key=f"del_{m['mission_id']}", type="primary"):
+                        run_query("DELETE FROM MISSION_MASTER WHERE mission_id = %s", (m['mission_id'],), fetch=False)
+                        st.toast(f"Mission ID {m['mission_id']} erased from database.")
+                        time.sleep(1)
+                        st.rerun()
+        else:
+            st.info("No missions available in the database. Create one to get started.")
 
 # ==========================================
 # 5. GLOBAL DATA FETCH (Syncs Admin and Pods)
@@ -138,15 +168,16 @@ with st.sidebar:
             missions = run_query("SELECT mission_id, mission_title, is_active FROM MISSION_MASTER ORDER BY created_at DESC")
             
             if missions:
-                mission_dict = {m['mission_title']: m['mission_id'] for m in missions}
-                active_m_title = next((m['mission_title'] for m in missions if m['is_active']), None)
+                # BUG FIX: Used Mission ID in the dictionary key so duplicate titles don't overwrite each other
+                mission_dict = {f"ID {m['mission_id']}: {m['mission_title']}": m['mission_id'] for m in missions}
+                active_m_title = next((f"ID {m['mission_id']}: {m['mission_title']}" for m in missions if m['is_active']), None)
                 
                 selected_mission = st.selectbox("Select Mission to Broadcast", options=list(mission_dict.keys()), index=list(mission_dict.keys()).index(active_m_title) if active_m_title else 0)
                 
                 if st.button("🔴 ACTIVATE SELECTED MISSION", use_container_width=True):
                     run_query("UPDATE MISSION_MASTER SET is_active = False, end_time = NULL, is_completed = False", fetch=False)
                     run_query("UPDATE MISSION_MASTER SET is_active = True WHERE mission_id = %s", (mission_dict[selected_mission],), fetch=False)
-                    st.success(f"'{selected_mission}' is now live!")
+                    st.success(f"Mission '{selected_mission}' is now live!")
                     time.sleep(1)
                     st.rerun()
             else:
