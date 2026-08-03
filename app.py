@@ -28,11 +28,12 @@ ANSWER_KEY = {'Q1': 0.15, 'Q2': 1.25, 'Q3': 1.80}
 TOLERANCE = 0.01
 
 # ==========================================
-# 2. DATABASE CONNECTION (PyMySQL)
+# 2. DATABASE CONNECTION (THREAD-SAFE FIX)
 # ==========================================
-@st.cache_resource
-def init_connection():
-    return pymysql.connect(
+
+def run_query(query, params=None, fetch=True):
+    # 1. Open a fresh, isolated connection for every query
+    conn = pymysql.connect(
         host=st.secrets["mysql"]["host"],
         user=st.secrets["mysql"]["user"],
         password=st.secrets["mysql"]["password"],
@@ -40,20 +41,18 @@ def init_connection():
         cursorclass=pymysql.cursors.DictCursor,
         autocommit=True
     )
-
-def run_query(query, params=None, fetch=True):
-    conn = init_connection()
-    conn.ping(reconnect=True) # Pro-tip: Prevents app from crashing if DB sleeps
     
-    with conn.cursor() as cursor:
-        cursor.execute(query, params or ())
-        if fetch:
-            return cursor.fetchall()
-        else:
-            conn.commit()
-            return None
-    cursor.close()
-    return None
+    # 2. Execute the query and guarantee the connection closes
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(query, params or ())
+            if fetch:
+                return cursor.fetchall()
+            else:
+                return None
+    finally:
+        # 3. Always close the connection so it doesn't leak memory
+        conn.close()
 
 # ==========================================
 # 3. SESSION STATE INITIALIZATION
