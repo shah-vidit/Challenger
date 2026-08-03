@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
-import mysql.connector
+import pymysql                  # <-- Swapped to pure python
+import pymysql.cursors          # <-- Added for dictionary support
 from datetime import datetime, timedelta
 import time
 
@@ -12,37 +13,13 @@ st.set_page_config(page_title="Speed Lab: Project Reliance", page_icon="⚡", la
 # Custom CSS for Dark-Mode Trading Desk Aesthetic
 st.markdown("""
     <style>
-    .stApp {
-        background-color: #0E1117;
-        color: #E0E6ED;
-    }
-    .main-header {
-        font-size: 2.5rem;
-        font-weight: 900;
-        color: #00FFAA;
-        text-align: center;
-        text-transform: uppercase;
-        letter-spacing: 2px;
-        margin-bottom: 0px;
-    }
-    .sub-header {
-        text-align: center;
-        color: #8892B0;
-        font-size: 1.2rem;
-        margin-bottom: 30px;
-    }
-    .status-badge-val {
-        background-color: #173b22; color: #00FFAA; padding: 4px 10px; border-radius: 5px; font-weight: bold;
-    }
-    .status-badge-fix {
-        background-color: #4a151b; color: #FF4B4B; padding: 4px 10px; border-radius: 5px; font-weight: bold;
-    }
-    .status-badge-prog {
-        background-color: #3b2b00; color: #FFD700; padding: 4px 10px; border-radius: 5px; font-weight: bold;
-    }
-    div[data-testid="stMetricValue"] {
-        color: #00FFAA;
-    }
+    .stApp { background-color: #0E1117; color: #E0E6ED; }
+    .main-header { font-size: 2.5rem; font-weight: 900; color: #00FFAA; text-align: center; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 0px; }
+    .sub-header { text-align: center; color: #8892B0; font-size: 1.2rem; margin-bottom: 30px; }
+    .status-badge-val { background-color: #173b22; color: #00FFAA; padding: 4px 10px; border-radius: 5px; font-weight: bold; }
+    .status-badge-fix { background-color: #4a151b; color: #FF4B4B; padding: 4px 10px; border-radius: 5px; font-weight: bold; }
+    .status-badge-prog { background-color: #3b2b00; color: #FFD700; padding: 4px 10px; border-radius: 5px; font-weight: bold; }
+    div[data-testid="stMetricValue"] { color: #00FFAA; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -51,31 +28,30 @@ ANSWER_KEY = {'Q1': 0.15, 'Q2': 1.25, 'Q3': 1.80}
 TOLERANCE = 0.01
 
 # ==========================================
-# 2. DATABASE CONNECTION
-# ==========================================
-# NOTE: Replace with your actual Alwaysdata credentials or use Streamlit secrets
-@st.cache_resource
-# ==========================================
-# 2. DATABASE CONNECTION (UPDATED FOR SECRETS)
+# 2. DATABASE CONNECTION (PyMySQL)
 # ==========================================
 @st.cache_resource
 def init_connection():
-    return mysql.connector.connect(
+    return pymysql.connect(
         host=st.secrets["mysql"]["host"],
         user=st.secrets["mysql"]["user"],
         password=st.secrets["mysql"]["password"],
-        database=st.secrets["mysql"]["database"]
+        database=st.secrets["mysql"]["database"],
+        cursorclass=pymysql.cursors.DictCursor,
+        autocommit=True
     )
 
 def run_query(query, params=None, fetch=True):
     conn = init_connection()
-    cursor = conn.cursor(dictionary=True)
-    cursor.execute(query, params or ())
-    if fetch:
-        result = cursor.fetchall()
-        cursor.close()
-        return result
-    conn.commit()
+    conn.ping(reconnect=True) # Pro-tip: Prevents app from crashing if DB sleeps
+    
+    with conn.cursor() as cursor:
+        cursor.execute(query, params or ())
+        if fetch:
+            return cursor.fetchall()
+        else:
+            conn.commit()
+            return None
     cursor.close()
     return None
 
