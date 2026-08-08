@@ -5,6 +5,7 @@ import pymysql.cursors
 from datetime import datetime, timedelta
 import time
 from streamlit_autorefresh import st_autorefresh
+import streamlit.components.v1 as components
 
 # ==========================================
 # 1. APP CONFIGURATION & STYLING
@@ -18,6 +19,25 @@ st.markdown("""
     .dev-credit { text-align: center; color: #8892B0; font-size: 0.9rem; margin-top: -5px; margin-bottom: 30px; letter-spacing: 1px; text-transform: uppercase; }
     .challenge-card { border: 1px solid #2e364a; padding: 20px; border-radius: 10px; margin-bottom: 15px; background-color: #161b26; }
     .locked-card { border: 1px dashed #424959; padding: 20px; border-radius: 10px; margin-bottom: 15px; background-color: #0E1117; color: #5c667a; opacity: 0.7;}
+    
+    div[data-baseweb="textarea"] textarea { 
+        color: #00FFAA !important; 
+        background-color: #0E1117 !important; 
+        border: 1px solid #424959 !important; 
+        font-family: monospace; 
+        font-size: 1.1rem;
+    }
+    
+    .big-table { width: 100%; border-collapse: collapse; text-align: left; background-color: #0E1117; margin-bottom: 30px; }
+    .big-table th, .big-table td { padding: 15px; border-bottom: 1px solid #2e364a; font-size: 1.4rem !important; }
+    .big-table th { color: #00FFAA; text-transform: uppercase; font-weight: 900; background-color: #161b26; }
+    .big-table tr:hover { background-color: #161b26; }
+    
+    .noselect {
+        -webkit-user-select: none;
+        -ms-user-select: none;
+        user-select: none;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -64,7 +84,6 @@ for key in ['pod_num', 'team_name']:
 def mission_studio():
     tab_create, tab_manage = st.tabs(["➕ Create New Mission", "🛠️ Manage Existing Missions"])
     
-    # --- TAB 1: CREATE ---
     with tab_create:
         st.markdown("### Draft a New Case Study")
         with st.form("deploy_mission_form"):
@@ -107,7 +126,6 @@ def mission_studio():
                 finally:
                     conn.close()
                     
-    # --- TAB 2: MANAGE & EDIT ---
     with tab_manage:
         st.markdown("### Edit or Delete Missions")
         all_missions = run_query("SELECT * FROM MISSION_MASTER ORDER BY created_at DESC")
@@ -282,10 +300,11 @@ with st.sidebar:
             st.rerun()
 
 # ==========================================
-# 6.5 LIVE PROJECTOR SYNC (AUTO-REFRESH)
+# 6.5 LIVE PROJECTOR SYNC 
 # ==========================================
-if timer_end_time and not is_lab_ended:
-    st_autorefresh(interval=5000, key="live_projector_sync")
+# Streamlit backend auto-refresh (Admin only to avoid breaking student typing)
+if st.session_state.admin_mode and timer_end_time and not is_lab_ended:
+    st_autorefresh(interval=3000, key="live_projector_sync")
 
 # ==========================================
 # 7. MAIN DASHBOARD & GAMIFIED MISSION LOGIC
@@ -293,12 +312,38 @@ if timer_end_time and not is_lab_ended:
 st.markdown("<div class='main-header'>Fintech Speed Lab</div>", unsafe_allow_html=True)
 st.markdown("<div class='dev-credit'>Developed by Vidit Shah</div>", unsafe_allow_html=True)
 
-if timer_end_time and not is_lab_ended:
-    time_remaining = (timer_end_time - datetime.now()).total_seconds()
-    mins, secs = divmod(int(time_remaining), 60)
-    st.markdown(f"<h2 style='text-align: center; color: #FF4B4B;'>⏳ TIME REMAINING: {mins:02d}:{secs:02d}</h2>", unsafe_allow_html=True)
-elif is_lab_ended:
+# ----------------- CUSTOM JS TIMER FOR STUDENTS -----------------
+if is_lab_ended:
     st.markdown("<h2 style='text-align: center; color: #FF4B4B;'>🛑 LAB LOCKED - TRADING HALTED</h2>", unsafe_allow_html=True)
+elif timer_end_time:
+    time_remaining_sec = (timer_end_time - datetime.now()).total_seconds()
+    
+    js_timer_html = f"""
+    <div id="countdown" style="font-family: sans-serif; font-size: 2rem; font-weight: bold; color: #FF4B4B; text-align: center; margin-bottom: 20px;">
+        ⏳ TIME REMAINING: ...
+    </div>
+    <script>
+        var timeRemaining = Math.max(0, {time_remaining_sec});
+        var display = document.getElementById('countdown');
+        
+        var interval = setInterval(function() {{
+            if (timeRemaining <= 0) {{
+                clearInterval(interval);
+                display.innerHTML = '🛑 LAB LOCKED - TRADING HALTED';
+                window.parent.location.reload();
+            }} else {{
+                var minutes = Math.floor(timeRemaining / 60);
+                var seconds = Math.floor(timeRemaining % 60);
+                var minStr = minutes < 10 ? "0" + minutes : minutes;
+                var secStr = seconds < 10 ? "0" + seconds : seconds;
+                display.innerHTML = '⏳ TIME REMAINING: ' + minStr + ':' + secStr;
+                timeRemaining--;
+            }}
+        }}, 1000);
+    </script>
+    """
+    components.html(js_timer_html, height=70)
+# ----------------------------------------------------------------
 
 if st.session_state.logged_in:
     
@@ -316,12 +361,16 @@ if st.session_state.logged_in:
     
     if not mission:
         st.info("📡 Standing by. Awaiting CFO to deploy the next mission...")
+        
+    elif not timer_end_time:
+        st.warning("⏳ Mission Selected. Awaiting CFO to START TIMER to reveal confidential data...")
+        
     else:
         m_id = mission['mission_id']
         
         with st.expander("📜 VIEW CFO MISSION BRIEF", expanded=False):
             st.markdown(f"### {mission['mission_title']}")
-            st.markdown(mission['mission_brief'])
+            st.markdown(f"<div class='noselect'>{mission['mission_brief']}</div>", unsafe_allow_html=True)
             if mission['file_data']:
                 st.divider()
                 st.download_button(
@@ -356,13 +405,17 @@ if st.session_state.logged_in:
         for c in challenges:
             step = c['step_number']
             
+            # Fetch attempts to show transparency/friction
+            attempts_query = run_query("SELECT COUNT(*) as attempts FROM CHALLENGE_SUBMISSIONS WHERE pod_number = %s AND challenge_id = %s", (st.session_state.pod_num, c['challenge_id']))
+            attempts_made = attempts_query[0]['attempts'] if attempts_query else 0
+            
             if step < current_step_num:
-                st.markdown(f"<div class='challenge-card'><h4>✅ Phase {step} Secured: {c['question_title']}</h4></div>", unsafe_allow_html=True)
+                st.markdown(f"<div class='challenge-card noselect'><h4>✅ Phase {step} Secured: {c['question_title']} <span style='font-size: 0.9rem; color: #8892B0; float: right;'>Attempts: {attempts_made}</span></h4></div>", unsafe_allow_html=True)
             
             elif step == current_step_num:
                 st.markdown(f"""
-                <div class='challenge-card' style='border-color: #00FFAA; border-width: 2px;'>
-                    <h4>▶️ Phase {step}: {c['question_title']}</h4>
+                <div class='challenge-card noselect' style='border-color: #00FFAA; border-width: 2px;'>
+                    <h4>▶️ Phase {step}: {c['question_title']} <span style='font-size: 0.9rem; color: #FF4B4B; float: right;'>Attempts: {attempts_made}</span></h4>
                     <p style='color: #8892B0; padding-left: 5px; border-left: 3px solid #FFD700; margin-bottom: 20px;'>
                         <b>Objective:</b> {c['objective']}
                     </p>
@@ -381,9 +434,13 @@ if st.session_state.logged_in:
                         
                         if submit and not is_lab_ended:
                             if len(audit_code.strip()) < 10:
-                                st.toast("❌ Audit Failed. You must provide your Python/Pandas code.", icon="🚨")
+                                st.error("❌ Audit Failed. You must provide your Python/Pandas code.")
                             else:
                                 is_correct = bool(abs(val - c['target_value']) <= TOLERANCE)
+                                
+                                # Check if anyone else has solved it yet (for First Blood Badge)
+                                fb_check = run_query("SELECT COUNT(*) as c FROM CHALLENGE_SUBMISSIONS WHERE challenge_id = %s AND is_correct = True", (c['challenge_id'],))
+                                is_first_blood = (fb_check[0]['c'] == 0) and is_correct
                                 
                                 run_query("""
                                     INSERT INTO CHALLENGE_SUBMISSIONS (pod_number, mission_id, challenge_id, submitted_value, is_correct, audit_code) 
@@ -391,15 +448,20 @@ if st.session_state.logged_in:
                                 """, (st.session_state.pod_num, m_id, c['challenge_id'], val, is_correct, audit_code), fetch=False)
                                 
                                 if is_correct:
-                                    st.toast("✅ Metric Validated! Decrypting next phase...", icon="🔓")
-                                    time.sleep(1.2)
+                                    if is_first_blood:
+                                        st.success(f"⚡ FIRST BLOOD! SPEED DEMON BONUS SECURED FOR PHASE {step}!")
+                                        st.snow()
+                                        time.sleep(2.5)
+                                    else:
+                                        st.success("✅ Metric Validated! Decrypting next phase...")
+                                        time.sleep(1.2)
                                     st.rerun()
                                 else:
-                                    st.toast("❌ Audit Failed. Recalculate your matrix.", icon="🚨")
+                                    st.error("❌ Audit Failed. Incorrect Value. Accuracy Penalty applied.")
                 st.markdown("</div>", unsafe_allow_html=True)
             
             else:
-                st.markdown(f"<div class='locked-card'><h4>🔒 Phase {step}: Classified (Clear Phase {step-1} to Access)</h4></div>", unsafe_allow_html=True)
+                st.markdown(f"<div class='locked-card noselect'><h4>🔒 Phase {step}: Classified (Clear Phase {step-1} to Access)</h4></div>", unsafe_allow_html=True)
 
 st.divider()
 
@@ -462,15 +524,16 @@ if mission:
             st.markdown("<h2 style='text-align: center; color: #FFD700;'>🏁 TRADING HALTED - FINAL RESULTS 🏁</h2>", unsafe_allow_html=True)
             col_2, col_1, col_3 = st.columns([1, 1.2, 1])
             
+            # Badges injected directly into the HTML podium
             if len(df_master) >= 1:
                 with col_1:
-                    st.markdown(f"<div style='background: #3b2b00; padding: 20px; border-radius: 10px; text-align: center; border: 2px solid #FFD700;'><h1 style='margin:0;'>🥇 1ST</h1><h3>{df_master.iloc[0]['team_name']}</h3><h2>{int(df_master.iloc[0]['Score'])} PTS</h2><p style='color: #8892B0;'>{df_master.iloc[0]['students']}</p></div>", unsafe_allow_html=True)
+                    st.markdown(f"<div style='background: #3b2b00; padding: 20px; border-radius: 10px; text-align: center; border: 2px solid #FFD700;'><h1 style='margin:0;'>🥇 1ST</h1><h3>{df_master.iloc[0]['team_name']} <span style='color: yellow;'>{df_master.iloc[0]['Badges']}</span></h3><h2>{int(df_master.iloc[0]['Score'])} PTS</h2><p style='color: #8892B0;'>{df_master.iloc[0]['students']}</p></div>", unsafe_allow_html=True)
             if len(df_master) >= 2:
                 with col_2:
-                    st.markdown(f"<div style='background: #161b26; padding: 20px; border-radius: 10px; text-align: center; border: 2px solid #C0C0C0; margin-top: 30px;'><h2 style='margin:0;'>🥈 2ND</h2><h4>{df_master.iloc[1]['team_name']}</h4><h3>{int(df_master.iloc[1]['Score'])} PTS</h3></div>", unsafe_allow_html=True)
+                    st.markdown(f"<div style='background: #161b26; padding: 20px; border-radius: 10px; text-align: center; border: 2px solid #C0C0C0; margin-top: 30px;'><h2 style='margin:0;'>🥈 2ND</h2><h4>{df_master.iloc[1]['team_name']} <span style='color: yellow;'>{df_master.iloc[1]['Badges']}</span></h4><h3>{int(df_master.iloc[1]['Score'])} PTS</h3></div>", unsafe_allow_html=True)
             if len(df_master) >= 3:
                 with col_3:
-                    st.markdown(f"<div style='background: #2a1b15; padding: 20px; border-radius: 10px; text-align: center; border: 2px solid #CD7F32; margin-top: 50px;'><h3 style='margin:0;'>🥉 3RD</h3><h4>{df_master.iloc[2]['team_name']}</h4><h3>{int(df_master.iloc[2]['Score'])} PTS</h3></div>", unsafe_allow_html=True)
+                    st.markdown(f"<div style='background: #2a1b15; padding: 20px; border-radius: 10px; text-align: center; border: 2px solid #CD7F32; margin-top: 50px;'><h3 style='margin:0;'>🥉 3RD</h3><h4>{df_master.iloc[2]['team_name']} <span style='color: yellow;'>{df_master.iloc[2]['Badges']}</span></h4><h3>{int(df_master.iloc[2]['Score'])} PTS</h3></div>", unsafe_allow_html=True)
             
             st.divider()
         
@@ -478,7 +541,8 @@ if mission:
         df_display['Phases'] = df_display['Phases'].apply(lambda x: f"{int(x)} / {total_q}")
         df_display = df_display.rename(columns={'team_name': 'Hedge Fund'})
         
-        st.dataframe(df_display, use_container_width=True, hide_index=True)
+        html_table = df_display.to_html(index=False, escape=False, classes="big-table")
+        st.markdown(html_table, unsafe_allow_html=True)
         
     else:
         st.info("Market is quiet. Awaiting first pod transmission...")
