@@ -593,14 +593,40 @@ if st.session_state.logged_in:
                                 target_str = str(c['target_value']).strip().lower()
                                 val_str = str(val).strip().lower()
                                 
+                                 # Place these string conversions directly above the try block
+                                target_str = str(c['target_value']).strip().lower()
+                                val_str = str(val).strip().lower()
+                                
                                 try:
-                                    if inp_type == 'Float':
-                                        is_correct = round(abs(float(val) - float(c['target_value'])), 4) <= round(tol_val, 4)
-                                    elif inp_type == 'Integer':
-                                        is_correct = bool(abs(int(val) - int(float(c['target_value']))) <= tol_val)
-                                    else:
-                                        is_correct = (val_str == target_str)
-                                except ValueError:
+                                    if inp_type in ['Float', 'Integer']:
+                                        # Strip commas, spaces, currency symbols, and percentage signs before math
+                                        chars_to_remove = [",", " ", "$", "₹", "%"]
+                                        clean_val = val_str
+                                        clean_target = target_str
+                                        for char in chars_to_remove:
+                                            clean_val = clean_val.replace(char, "")
+                                            clean_target = clean_target.replace(char, "")
+                                            
+                                        if inp_type == 'Float':
+                                            is_correct = round(abs(float(clean_val) - float(clean_target)), 4) <= round(tol_val, 4)
+                                        elif inp_type == 'Integer':
+                                            is_correct = bool(abs(int(float(clean_val)) - int(float(clean_target))) <= tol_val)
+                                
+                                    elif inp_type == 'Boolean':
+                                        # Standardize truthy/falsy values across DB and UI formats
+                                        truthy_values = ['true', '1', 't', 'yes', 'y']
+                                        val_bool = val_str in truthy_values
+                                        target_bool = target_str in truthy_values
+                                        is_correct = (val_bool == target_bool)
+                                        
+                                    else: 
+                                        # Text / Date validation: removes all whitespace to normalize lists/vectors
+                                        # Example: "0, 0, +1.0" -> "0,0,+1.0"
+                                        clean_val = val_str.replace(" ", "")
+                                        clean_target = target_str.replace(" ", "")
+                                        is_correct = (clean_val == clean_target)
+                                        
+                                except Exception: 
                                     is_correct = False
                                 
                                 fb_check = run_query("SELECT COUNT(*) as c FROM CHALLENGE_SUBMISSIONS WHERE challenge_id = %s AND is_correct = True", (c['challenge_id'],))
